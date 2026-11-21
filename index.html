@@ -355,7 +355,7 @@ function teardown(c){
 
 // ---------- Player on the TV ----------
 const NS='urn:x-cast:com.apada.whitenoise';
-let ctx=null, master=null, current=null, soundId=null, endAt=0, fadeMs=60000, timerTick=null;
+let ctx=null, master=null, current=null, soundId=null, endAt=0, fadeMs=60000, timerTick=null, idleClose=null;
 
 function ensureAudio(){
   if(ctx) return;
@@ -368,6 +368,7 @@ function ensureAudio(){
 
 function play(id){
   if(!SOUNDS[id]) return;
+  clearTimeout(idleClose);
   ensureAudio();
   if(ctx.state!=='running') ctx.resume();
   if(current){ teardown(current); current=null; }
@@ -425,7 +426,7 @@ context.addCustomMessageListener(NS, ev=>{
   const m=ev.data||{};
   if(m.cmd==='play'){ play(m.id); setTimer(m.remainMs||0); }
   else if(m.cmd==='timer'){ setTimer(m.remainMs||0); }
-  else if(m.cmd==='stop'){ stopSound(()=>context.stop()); }
+  else if(m.cmd==='stop'){ stopSound(); clearTimeout(idleClose); idleClose=setTimeout(()=>context.stop(),5*60000); }   // stay ready 5 min for another sound
   else if(m.cmd==='status'){ status(); }
 });
 // If the phone ends casting on purpose, stop and close. If it just goes to sleep, keep playing.
