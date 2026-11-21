@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neighbor Mute</title>
+<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Roboto,Arial,sans-serif}
+  #tag{position:absolute;display:flex;align-items:center;gap:14px;color:#8A9099;transition:opacity 2s}
+  #name{font-size:22px;color:#9AA0A8}
+  #sub{font-size:15px;color:#6B717A;margin-top:3px}
+</style>
+</head>
+<body>
+<div id="tag" style="left:62%;top:72%;opacity:0">
+  <svg width="30" height="30" viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="10" fill="#10151E"/><path d="M8 18.5L18 10l10 8.5" stroke="#4A6A99" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 17v9h14v-9" stroke="#4A6A99" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <div><div id="name"></div><div id="sub"></div></div>
+</div>
+<script>
+// Neighbor Mute - TV / speaker page (Chromecast receiver). The phone only sends short commands;
+// the sound is made here, so the phone can be locked or switched off.
+const F=(type,freq,o={})=>Object.assign({type,freq},o);
+// Same 15 sounds as the app (keep in step with Sounds.kt)
+const SOUNDS={
+  white :{name:'White noise', layers:[{src:'white',g:0.55}]},
+  brown :{name:'Brown noise', layers:[{src:'pink',g:1.1,f:[F('lowpass',2500)]},{src:'brown',g:0.3}]},
+  green :{name:'Green noise', layers:[{src:'pink',g:2.4,f:[F('bandpass',500,{Q:0.6})]}]},
+  fan   :{name:'Fan', layers:[{src:'brown',g:0.6,f:[F('lowpass',900)]},{src:'pink',g:0.25,f:[F('highpass',300),F('lowpass',2500)]}], tones:[{f:110,g:0.025,lfo:{rate:9,depth:0.5}}]},
+  oscfan:{name:'Oscillating fan', pan:{rate:0.1,depth:0.6}, layers:[{src:'brown',g:0.55,f:[F('lowpass',900)]},{src:'pink',g:0.35,f:[F('highpass',300),F('lowpass',2200)],sweep:{rate:0.1,depth:1200},am:{rate:0.1,depth:0.35}}]},
+  ac    :{name:'A/C', layers:[{src:'pink',g:0.55,f:[F('highpass',120),F('lowpass',3000)]},{src:'brown',g:0.4}], tones:[{f:60,g:0.1,lfo:{rate:0.3,depth:0.9}},{f:120,g:0.05},{f:121.5,g:0.05},{f:180,g:0.04,lfo:{rate:0.17,depth:1}}]},
+  plane :{name:'Airplane', layers:[{src:'brown',g:1.0,f:[F('lowpass',500)]},{src:'pink',g:0.6,f:[F('bandpass',1200,{Q:0.5})]}], tones:[{f:3150,g:0.006},{f:4200,g:0.014,lfo:{rate:0.25,depth:0.25}},{f:8400,g:0.005,lfo:{rate:0.31,depth:0.3}}]},
+  rain  :{name:'Rain', layers:[{src:'pink',g:0.3,f:[F('highpass',500),F('lowpass',7000)]},{src:'rain',g:0.9,f:[F('highpass',1200),F('lowpass',9000)]}]},
+  heavyrain:{name:'Heavy rain', layers:[{src:'white',g:1.2,f:[F('bandpass',2200,{Q:0.6})]},{src:'pink',g:0.35,f:[F('highpass',400)]}], tones:[{f:1450,g:0.006},{f:2900,g:0.003}]},
+  waterfall:{name:'Waterfall', layers:[{src:'pink',g:0.9,f:[F('highpass',150),F('lowpass',6000)]},{src:'white',g:0.25,f:[F('bandpass',3000,{Q:0.5})]}]},
+  crickets:{name:'Crickets', layers:[{src:'chorus',g:1.5},{src:'orniFar',g:1.25,f:[F('lowpass',6000)]},{src:'brown',g:0.12,f:[F('lowpass',300)]}]},
+  fireplace:{name:'Fireplace', layers:[{src:'brown',g:0.7,f:[F('lowpass',400)]},{src:'fireSoft',g:1.8,f:[F('highpass',800)]}]},
+  waves :{name:'Waves', layers:[{src:'brown',g:0.5,gd:{depth:0.4,min:4,max:10}},{src:'pink',g:0.8,f:[F('lowpass',1500)],gd:{depth:0.8,min:3,max:8},fd:{depth:0.6,min:3,max:8}},{src:'white',g:0.15,f:[F('bandpass',2500,{Q:0.5})],gd:{depth:0.9,min:2,max:6}}]},
+  train :{name:'Train', layers:[{src:'brown',g:0.8,f:[F('lowpass',300)]},{src:'pink',g:0.3,f:[F('bandpass',500,{Q:0.7})],gd:{depth:0.3,min:3,max:8}},{src:'railsV1',g:1.1,f:[F('lowpass',1500)]}]},
+  sprinklers:{name:'Sprinklers', layers:[{src:'brown',g:1.2,f:[F('lowpass',250)]},{src:'white',g:0.12,f:[F('bandpass',1500,{Q:2})],am:{rate:12,depth:1,type:'triangle'}}], tones:[{f:40,type:'sawtooth',g:0.03,lfo:{rate:12,depth:0.4}}]}
+};
+const CR={rain:{rate:350,dmin:2,dmax:10,pow:2},tin:{rate:700,dmin:1,dmax:4,pow:3},fire:{rate:30,dmin:0.3,dmax:2.5,pow:4},fireSoft:{rate:12,dmin:0.3,dmax:2.5,pow:4},fireBusy:{rate:80,dmin:0.3,dmax:2,pow:4},vinyl:{rate:90,dmin:0.1,dmax:0.6,pow:5},tick:{rate:1.2,dmin:3,dmax:12,pow:2},clank:{rate:0.5,dmin:30,dmax:120,pow:2},pebble:{rate:900,dmin:0.5,dmax:3,pow:3},thud:{rate:1.3,dmin:40,dmax:90,pow:1}};
+
+// ---------- Audio engine ----------
+
+function gen(kind,s){
+  const w=Math.random()*2-1;
+  switch(kind){
+    case 'white': return w*0.5;
+    case 'pink': {
+      s.b0=0.99886*s.b0+w*0.0555179; s.b1=0.99332*s.b1+w*0.0750759; s.b2=0.96900*s.b2+w*0.1538520;
+      s.b3=0.86650*s.b3+w*0.3104856; s.b4=0.55000*s.b4+w*0.5329522; s.b5=-0.7616*s.b5-w*0.0168980;
+      const o=s.b0+s.b1+s.b2+s.b3+s.b4+s.b5+s.b6+w*0.5362; s.b6=w*0.115926; return o*0.11;
+    }
+    case 'brown': s.l=(s.l+0.02*w)/1.02; return s.l*3.5;
+    case 'violet': { const v=w-s.p; s.p=w; return v*0.25; }
+    case 'rain': case 'tin': case 'fire': case 'fireSoft': case 'fireBusy': case 'vinyl': case 'tick': case 'clank': case 'pebble': case 'thud': {
+      const c=CR[kind];
+      // random short "drops": each a quick burst of noise that dies away in a few ms
+      if(Math.random()<s.rate && s.drops.length<80){
+        const r=Math.random();
+        s.drops.push({a:0.15+0.85*Math.pow(r,c.pow), d:Math.exp(-1/(s.sr*(c.dmin+Math.random()*(c.dmax-c.dmin))/1000))});
+      }
+      let o=0;
+      for(let i=s.drops.length-1;i>=0;i--){
+        const dr=s.drops[i]; o+=dr.a*(Math.random()*2-1); dr.a*=dr.d;
+        if(dr.a<0.001) s.drops.splice(i,1);
+      }
+      return o*0.5;
+    }
+  }
+  return 0;
+}
+
+const BUF={};
+// Insects: each "voice" is one insect at its own pitch, speed and distance
+const INS={
+  cricket1:{type:'tone',count:2,fmin:4300,fmax:4700,pulses:[3,3],plen:0.014,pgap:0.018,emin:0.5,emax:0.7,jitter:0.08,amin:0.6,amax:1},
+  chorus:{type:'tone',count:14,fmin:3800,fmax:5400,pulses:[2,4],plen:0.012,pgap:0.016,emin:0.35,emax:1.1,jitter:0.12,amin:0.15,amax:0.8},
+  slowcr:{type:'tone',count:2,fmin:3700,fmax:3900,pulses:[2,2],plen:0.02,pgap:0.03,emin:1.1,emax:1.5,jitter:0.1,amin:0.6,amax:1},
+  trill:{type:'tone',count:4,fmin:2800,fmax:3200,pulses:[30,45],plen:0.008,pgap:0.012,emin:2.5,emax:4,jitter:0.2,amin:0.3,amax:0.9},
+  katydid:{type:'noise',count:3,pulses:[3,3],plen:0.07,pgap:0.06,emin:1.6,emax:2.4,jitter:0.2,amin:0.4,amax:1},
+  cicada:{type:'buzz',fam:140},
+  rails:{type:'rails',period:1.0,offs:[0,0.1,0.68,0.78]},
+  railsV1:{type:'rails',period:1.0,offs:[0,0.1,0.68,0.78],vary:{every:[3,6],lvl:[0.82,0.92],tone:0.12,knock:[0.88,1]}},
+  railsV2:{type:'rails',period:1.0,offs:[0,0.1,0.68,0.78],vary:{every:[2,5],lvl:[0.72,0.88],tone:0.2,knock:[0.82,1]}},
+  railsSlow:{type:'rails',period:1.4,offs:[0,0.14,0.95,1.09]},
+  railsFast:{type:'rails',period:0.7,offs:[0,0.07,0.48,0.55]},
+  bubbles:{type:'bubbles',rate:45,fmin:350,fmax:1400,dmin:0.02,dmax:0.07,amin:0.2,amax:1},
+  clack:{type:'noise',count:1,pulses:[2,2],plen:0.03,pgap:0.13,emin:1.15,emax:1.2,jitter:0.03,amin:1,amax:1},
+  orni:{type:'orni',voices:12,fmin:3600,fmax:5400,pmin:0.15,pmax:0.24,amin:0.25,amax:0.8},
+  orniFar:{type:'orni',voices:16,fmin:3400,fmax:5000,pmin:0.15,pmax:0.25,amin:0.15,amax:0.45},
+  orniNear:{type:'orni',voices:4,fmin:4000,fmax:5200,pmin:0.17,pmax:0.22,amin:0.7,amax:1},
+  cicNat:{type:'cicadaV',voices:6,fmin:4200,fmax:6800,rmin:180,rmax:420,callMin:4,callMax:12,gapMin:1,gapMax:8,amin:0.25,amax:1,q:4},
+  cicFar:{type:'cicadaV',voices:9,fmin:3800,fmax:6000,rmin:160,rmax:380,callMin:5,callMax:14,gapMin:0.5,gapMax:6,amin:0.15,amax:0.5,q:3},
+  cicSoft:{type:'cicadaV',voices:3,fmin:4000,fmax:5600,rmin:170,rmax:320,callMin:4,callMax:10,gapMin:3,gapMax:12,amin:0.2,amax:0.5,q:3.5},
+  cicTree:{type:'cicadaV',voices:2,fmin:4800,fmax:6200,rmin:250,rmax:400,callMin:8,callMax:16,gapMin:2,gapMax:6,amin:0.7,amax:1,q:5},
+  cicada2:{type:'buzz',fam:190}
+};
+function insect(cfg,n,sr){
+  const out=new Float32Array(n);
+  if(cfg.type==='rails'){
+    // Wheels over rail joints: each car's 4 axles give "da-dum ... da-dum" once per joint.
+    // Speed drifts slowly, every click is a little different, so it never sounds like a metronome.
+    let t=0, speed=1, target=1;
+    const V=cfg.vary; let until=V? V.every[0]+Math.floor(Math.random()*(V.every[1]-V.every[0]+1)) : 0;
+    const baseTone=60+Math.random()*30;
+    while(t<n){
+      if(Math.random()<0.15) target=0.94+Math.random()*0.12;
+      speed+= (target-speed)*0.2;
+      const P=cfg.period/speed;
+      // every few joints, one joint is a touch softer and slightly different in tone
+      let jl=1, jt=1;
+      if(V){ if(--until<=0){ jl=V.lvl[0]+Math.random()*(V.lvl[1]-V.lvl[0]); jt=1+V.tone*(Math.random()*2-1);
+               until=V.every[0]+Math.floor(Math.random()*(V.every[1]-V.every[0]+1)); } }
+      for(const o of cfg.offs){
+        const st=t+Math.floor(o/speed*sr*(1+0.02*(Math.random()*2-1)));
+        const amp=(V? V.knock[0]+Math.random()*(V.knock[1]-V.knock[0]) : 0.6+Math.random()*0.4)*jl;
+        const tone=V? baseTone*jt*(1+0.04*(Math.random()*2-1)) : 60+Math.random()*30;
+        const len=Math.floor(0.12*sr);
+        for(let k=0;k<len && st+k<n;k++){
+          const tt=k/sr;
+          const click=(Math.random()*2-1)*Math.exp(-tt/0.012);       // the metal tick
+          const thump=Math.sin(2*Math.PI*tone*tt)*Math.exp(-tt/0.04); // the body of the knock
+          out[st+k]+=(click*0.5+thump)*amp*0.45;
+        }
+      }
+      t+=Math.floor(P*sr);
+    }
+    return out;
+  }
+  if(cfg.type==='bubbles'){
+    // Water bubbles: short tones that rise slightly in pitch and die away fast, at random times
+    let t=0;
+    while(t<n){
+      t+=Math.floor(-Math.log(1-Math.random())*sr/cfg.rate);
+      const f0=cfg.fmin*Math.pow(cfg.fmax/cfg.fmin,Math.random()), dur=cfg.dmin+Math.random()*(cfg.dmax-cfg.dmin);
+      const amp=cfg.amin+Math.random()*(cfg.amax-cfg.amin), len=Math.floor(dur*3*sr);
+      let ph=0;
+      for(let k=0;k<len && t+k<n;k++){
+        const tt=k/sr, f=f0*(1+0.6*tt/dur);
+        ph+=f/sr;
+        out[t+k]+=Math.sin(2*Math.PI*ph)*Math.exp(-tt/dur)*Math.min(1,k/(0.002*sr))*amp*0.25;
+      }
+    }
+    return out;
+  }
+  if(cfg.type==='orni'){
+    // Mediterranean cicadas: each sings without pause in short rhythmic bursts ("tsi-tsi-tsi"),
+    // a few bursts per second; many together give a steady shimmering chorus with no silent moments
+    for(let v=0;v<cfg.voices;v++){
+      const fc=cfg.fmin+Math.random()*(cfg.fmax-cfg.fmin), amp=cfg.amin+Math.random()*(cfg.amax-cfg.amin);
+      const q=3+Math.random()*2, w0=2*Math.PI*fc/sr, al=Math.sin(w0)/(2*q), a0=1+al;
+      const b0=al/a0, b2=-al/a0, a1=-2*Math.cos(w0)/a0, a2=(1-al)/a0;
+      let x1=0,x2=0,y1=0,y2=0;
+      const P=cfg.pmin+Math.random()*(cfg.pmax-cfg.pmin), click=280+Math.random()*180;
+      let t=Math.floor(Math.random()*P*sr), cph=0, slow=Math.random()*6.28, slowR=0.05+Math.random()*0.1;
+      while(t<n){
+        const per=Math.floor(P*sr*(1+0.08*(Math.random()*2-1))), len=Math.floor(per*(0.5+Math.random()*0.15));
+        const lvl=0.85+Math.random()*0.15;
+        for(let k=0;k<len && t+k<n;k++){
+          const i=t+k;
+          const env=Math.sin(Math.PI*k/len);
+          cph+=click/sr; if(cph>=1) cph-=1;
+          const pulse=Math.pow(0.5+0.5*Math.cos(2*Math.PI*cph),4);
+          const x=Math.random()*2-1;
+          const y=b0*x+b2*x2-a1*y1-a2*y2; x2=x1; x1=x; y2=y1; y1=y;
+          const drift=0.85+0.15*Math.sin(slow+2*Math.PI*slowR*i/sr);   // gentle, never silent
+          out[i]+=y*pulse*env*lvl*amp*drift*1.6;
+        }
+        t+=per;
+      }
+    }
+    return out;
+  }
+  if(cfg.type==='cicadaV'){
+    // Each cicada sings in calls: it swells in, buzzes with uneven clicks, then winds down (slower, lower)
+    for(let v=0;v<cfg.voices;v++){
+      const fc=cfg.fmin+Math.random()*(cfg.fmax-cfg.fmin), amp=cfg.amin+Math.random()*(cfg.amax-cfg.amin);
+      const w0=2*Math.PI*fc/sr, al=Math.sin(w0)/(2*cfg.q), a0=1+al;
+      const b0=al/a0, b2=-al/a0, a1=-2*Math.cos(w0)/a0, a2=(1-al)/a0;
+      let x1=0,x2=0,y1=0,y2=0;
+      const rate0=cfg.rmin+Math.random()*(cfg.rmax-cfg.rmin);
+      let t=Math.floor(Math.random()*cfg.gapMax*sr);
+      while(t<n){
+        const len=Math.floor((cfg.callMin+Math.random()*(cfg.callMax-cfg.callMin))*sr);
+        const rise=Math.floor(sr*(1+Math.random()*2)), fall=Math.floor(sr*(1.5+Math.random()*2));
+        let ph=0, clickAmp=1;
+        for(let k=0;k<len && t+k<n;k++){
+          let env=1; if(k<rise) env=k/rise; else if(k>len-fall) env=(len-k)/fall;
+          const wind=k>len-fall?0.7+0.3*env:1;                 // slows down as it fades
+          const r=rate0*wind*(1+0.08*(Math.random()*2-1));
+          ph+=r/sr; if(ph>=1){ ph-=1; clickAmp=0.6+Math.random()*0.4; }
+          const pulse=Math.pow(0.5+0.5*Math.cos(2*Math.PI*ph),6)*clickAmp;
+          const x=Math.random()*2-1;
+          const y=b0*x+b2*x2-a1*y1-a2*y2; x2=x1; x1=x; y2=y1; y1=y;
+          out[t+k]+=y*pulse*env*env*amp*2.2;
+        }
+        t+=len+Math.floor((cfg.gapMin+Math.random()*(cfg.gapMax-cfg.gapMin))*sr);
+      }
+    }
+    return out;
+  }
+  if(cfg.type==='buzz'){
+    let ph=0, f=cfg.fam;
+    for(let i=0;i<n;i++){
+      if(i%4800===0) f=cfg.fam*(0.95+Math.random()*0.1);
+      ph+=f/sr; if(ph>1) ph-=1;
+      const a=0.5+0.5*Math.sin(2*Math.PI*ph);
+      out[i]=(Math.random()*2-1)*a*a*0.6;
+    }
+    return out;
+  }
+  for(let v=0;v<cfg.count;v++){
+    const f=cfg.fmin? cfg.fmin+Math.random()*(cfg.fmax-cfg.fmin):0;
+    const every=cfg.emin+Math.random()*(cfg.emax-cfg.emin);
+    const amp=cfg.amin+Math.random()*(cfg.amax-cfg.amin);
+    const np=cfg.pulses[0]+Math.floor(Math.random()*(cfg.pulses[1]-cfg.pulses[0]+1));
+    const pl=Math.floor(cfg.plen*sr), pg=Math.floor(cfg.pgap*sr);
+    let t=Math.random()*every;
+    while(t*sr<n){
+      let st=Math.floor(t*sr);
+      for(let p=0;p<np;p++){
+        for(let k=0;k<pl;k++){
+          const i=st+k; if(i>=n) break;
+          const env=Math.sin(Math.PI*k/pl);
+          const c=cfg.type==='tone'? Math.sin(2*Math.PI*f*i/sr) : (Math.random()*2-1);
+          out[i]+=amp*env*c*0.35;
+        }
+        st+=pl+pg;
+      }
+      t+=every*(1+cfg.jitter*(Math.random()*2-1));
+    }
+  }
+  return out;
+}
+function noiseBuffer(kind){
+  // Made once, then looped by the browser's audio thread (no main-thread gaps).
+  if(BUF[kind]) return BUF[kind];
+  const sr=ctx.sampleRate, L=Math.floor(sr*((CR[kind]||INS[kind])?16:12)), X=Math.floor(sr*0.5);
+  const b=ctx.createBuffer(2,L,sr);
+  for(let ch=0;ch<2;ch++){
+    const s={b0:0,b1:0,b2:0,b3:0,b4:0,b5:0,b6:0,l:0,p:0,drops:[],sr,rate:(CR[kind]?CR[kind].rate:350)/sr};
+    for(let i=0;i<sr;i++) gen(kind,s); // settle the filters first
+    let raw;
+    if(INS[kind]) raw=(ch===1 && b._ins0)? b._ins0 : (b._ins0=insect(INS[kind],L+X,sr));   // same in both channels
+    else { raw=new Float32Array(L+X); for(let i=0;i<L+X;i++) raw[i]=gen(kind,s); }
+    let mean=0; for(let i=0;i<L+X;i++) mean+=raw[i]; mean/=(L+X);
+    const d=b.getChannelData(ch);
+    for(let i=0;i<L;i++) d[i]=raw[i]-mean;
+    for(let i=0;i<X;i++){ const t=i/X; d[i]=(raw[i]-mean)*Math.sqrt(t)+(raw[L+i]-mean)*Math.sqrt(1-t); } // seamless loop joint
+  }
+  return BUF[kind]=b;
+}
+function noiseNode(kind){
+  const src=ctx.createBufferSource(); src.buffer=noiseBuffer(kind); src.loop=true;
+  src.start(0, Math.random()*src.buffer.duration*0.9);
+  return src;
+}
+
+function lfo(rate,amount,target,parts,type){
+  const o=ctx.createOscillator(); o.type=type||'sine'; o.frequency.value=rate;
+  const g=ctx.createGain(); g.gain.value=amount; o.connect(g); g.connect(target); o.start(); parts.push(o,g);
+  return o;
+}
+// Random drift: every few seconds (random), glide a setting to a new random value near its base
+function drift(param,base,d,parts){
+  const st={timer:null,stop(){clearTimeout(this.timer);}};
+  const step=()=>{
+    const dur=d.min+Math.random()*(d.max-d.min);
+    const v=Math.max(0,base*(1+d.depth*(Math.random()*2-1)));
+    try{ param.setTargetAtTime(v,ctx.currentTime,dur/3); }catch(e){}
+    st.timer=setTimeout(step,dur*1000);
+  };
+  step(); parts.push(st);
+}
+function build(id){
+  const def=SOUNDS[id], out=ctx.createGain(), parts=[];
+  out.gain.value=0;
+  const lg=[], lf=[];
+  for(const L of def.layers){
+    const src=noiseNode(L.src); parts.push(src);
+    let node=src;
+    for(const f of (L.f||[])){
+      const bq=ctx.createBiquadFilter(); bq.type=f.type; bq.frequency.value=f.freq;
+      if(f.Q!==undefined) bq.Q.value=f.Q; if(f.gain!==undefined) bq.gain.value=f.gain;
+      node.connect(bq); node=bq; parts.push(bq);
+    }
+    if(L.sweep && node!==src) lfo(L.sweep.rate,L.sweep.depth,node.frequency,parts);   // moving tone colour
+    if(L.fd && node!==src) drift(node.frequency,node.frequency.value,L.fd,parts);       // tone colour wanders
+    const g=ctx.createGain(); g.gain.value=L.g; node.connect(g); g.connect(out); parts.push(g);
+    lg.push(g); lf.push(node!==src?node:null);
+    if(L.gd) drift(g.gain,L.g,L.gd,parts);                                             // loudness wanders
+    if(L.am){ const o=lfo(L.am.rate,L.g*L.am.depth,g.gain,parts,L.am.type);           // pulsing / rattling level
+      if(L.am.rd) drift(o.frequency,L.am.rate,L.am.rd,parts); }                        // rattle speed wanders
+  }
+  for(const T of (def.tones||[])){
+    const o=ctx.createOscillator(); o.frequency.value=T.f; if(T.type) o.type=T.type;
+    const g=ctx.createGain(); g.gain.value=T.g; o.connect(g); g.connect(out); o.start(); parts.push(o,g);
+    if(T.gd) drift(g.gain,T.g,T.gd,parts);
+    if(T.pd) drift(o.frequency,T.f,T.pd,parts);
+    if(T.lfo){
+      const l=ctx.createOscillator(); l.frequency.value=T.lfo.rate;
+      const lg=ctx.createGain(); lg.gain.value=T.g*T.lfo.depth; l.connect(lg); lg.connect(g.gain); l.start(); parts.push(l,lg);
+    }
+  }
+  if(def.waves) [].concat(def.waves).forEach(w=>waves(w,lg,lf,parts));
+  if(def.pan){ const pn=ctx.createStereoPanner(); out.connect(pn); pn.connect(master); parts.push(pn); lfo(def.pan.rate,def.pan.depth,pn.pan,parts); }
+  else out.connect(master);
+  const t=ctx.currentTime; out.gain.setValueAtTime(0,t); out.gain.linearRampToValueAtTime(1,t+0.6);
+  return {out,parts};
+}
+
+// Waves: at random times a wave builds up, crashes, then washes back. Each wave has a random size.
+// All wave layers share the same timing, so build-up, crash and spray line up.
+function waves(W,lg,lf,parts){
+  const st={timer:null,stop(){clearTimeout(this.timer);}};
+  const one=()=>{
+    const t=ctx.currentTime+0.05;
+    const size=W.smin+Math.random()*(W.smax-W.smin);
+    const rise=W.riseR?W.riseR[0]+Math.random()*(W.riseR[1]-W.riseR[0]):W.rise*(0.7+Math.random()*0.6);
+    const tc=t+rise;                                  // moment of the crash
+    const hit=W.hit||0.25;                            // how fast the crash comes
+    for(const E of W.layers){
+      const g=lg[E.i].gain, f=lf[E.i]?lf[E.i].frequency:null;
+      const pk=E.base+(E.peak-E.base)*size, decay=E.decay*(0.7+Math.random()*0.6);
+      g.cancelScheduledValues(t); g.setValueAtTime(g.value,t);
+      if(E.delay===undefined){
+        g.linearRampToValueAtTime(E.base+(pk-E.base)*0.4,tc);     // build-up
+        g.linearRampToValueAtTime(pk,tc+hit);                      // crash
+        g.setTargetAtTime(E.base,tc+hit,decay/3);                  // wash back
+      } else {
+        g.setValueAtTime(E.base,tc+E.delay);
+        const at=E.att||0.08;
+        g.linearRampToValueAtTime(pk,tc+E.delay+at);               // burst after the crash
+        g.setTargetAtTime(E.base,tc+E.delay+at,decay/3);
+      }
+      if(f && E.fmax){
+        f.cancelScheduledValues(t); f.setValueAtTime(f.value,t);
+        f.linearRampToValueAtTime(E.fmin+(E.fmax-E.fmin)*0.3,tc);
+        f.linearRampToValueAtTime(E.fmin+(E.fmax-E.fmin)*Math.min(1,size),tc+hit);
+        f.setTargetAtTime(E.fmin,tc+hit,decay/2.5);
+      }
+    }
+    st.timer=setTimeout(one,(rise+W.gap[0]+Math.random()*(W.gap[1]-W.gap[0]))*1000);
+  };
+  st.timer=setTimeout(one,300+Math.random()*1200); parts.push(st);
+}
+
+function teardown(c){
+  const t=ctx.currentTime;
+  c.out.gain.cancelScheduledValues(t); c.out.gain.setValueAtTime(c.out.gain.value,t); c.out.gain.linearRampToValueAtTime(0,t+0.6);
+  setTimeout(()=>{ for(const p of c.parts){ try{ if(p.stop) p.stop(); }catch(e){} try{p.disconnect();}catch(e){} } try{c.out.disconnect();}catch(e){} },700);
+}
+
+
+// ---------- Player on the TV ----------
+const NS='urn:x-cast:com.apada.whitenoise';
+let ctx=null, master=null, current=null, soundId=null, endAt=0, fadeMs=60000, timerTick=null;
+
+function ensureAudio(){
+  if(ctx) return;
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  master=ctx.createGain();
+  const lim=ctx.createDynamicsCompressor();
+  lim.threshold.value=-2; lim.knee.value=6; lim.ratio.value=12; lim.attack.value=0.03; lim.release.value=0.5;
+  master.gain.value=0.8; master.connect(lim); lim.connect(ctx.destination);
+}
+
+function play(id){
+  if(!SOUNDS[id]) return;
+  ensureAudio();
+  if(ctx.state!=='running') ctx.resume();
+  if(current){ teardown(current); current=null; }
+  soundId=id; current=build(id);
+  show(); status();
+}
+
+function stopSound(then){
+  if(current){ teardown(current); current=null; }
+  soundId=null; endAt=0; clearInterval(timerTick);
+  document.getElementById('tag').style.opacity=0;
+  status();
+  if(then) setTimeout(then,800);
+}
+
+// Timer: remaining time comes from the phone; the TV fades the sound out by itself and closes
+function setTimer(remainMs){
+  clearInterval(timerTick); endAt=0;
+  if(!ctx) return;
+  const t=ctx.currentTime;
+  master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(master.gain.value,t);
+  master.gain.linearRampToValueAtTime(0.8,t+0.3);
+  if(remainMs>0){
+    endAt=Date.now()+remainMs;
+    fadeMs=Math.min(60000,remainMs/3);
+    const left=remainMs/1000, fade=fadeMs/1000;
+    master.gain.setValueAtTime(0.8,t+Math.max(0.3,left-fade));
+    master.gain.linearRampToValueAtTime(0,t+left);
+    timerTick=setInterval(()=>{ if(Date.now()>=endAt){ stopSound(()=>context.stop()); } else show(); },30000);
+  }
+  show();
+}
+
+function show(){
+  const tag=document.getElementById('tag');
+  if(!soundId){ tag.style.opacity=0; return; }
+  document.getElementById('name').textContent=SOUNDS[soundId].name;
+  document.getElementById('sub').textContent=endAt? 'Stops at '+new Date(endAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : '';
+  tag.style.opacity=1;
+}
+// Move the small text slowly around the dark screen so nothing stays in one place (no burn-in)
+setInterval(()=>{
+  const tag=document.getElementById('tag');
+  tag.style.opacity=0;
+  setTimeout(()=>{ tag.style.left=(8+Math.random()*60)+'%'; tag.style.top=(10+Math.random()*72)+'%'; if(soundId) tag.style.opacity=1; },2200);
+},60000);
+
+function status(){
+  try{ context.sendCustomMessage(NS,undefined,{state: soundId?'playing':'stopped', id: soundId, endAt}); }catch(e){}
+}
+
+// ---------- Cast connection ----------
+const context=cast.framework.CastReceiverContext.getInstance();
+context.addCustomMessageListener(NS, ev=>{
+  const m=ev.data||{};
+  if(m.cmd==='play'){ play(m.id); setTimer(m.remainMs||0); }
+  else if(m.cmd==='timer'){ setTimer(m.remainMs||0); }
+  else if(m.cmd==='stop'){ stopSound(()=>context.stop()); }
+  else if(m.cmd==='status'){ status(); }
+});
+// If the phone ends casting on purpose, stop and close. If it just goes to sleep, keep playing.
+context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, ev=>{
+  if(context.getSenders().length===0 && ev.reason===cast.framework.system.DisconnectReason.REQUESTED_BY_SENDER){
+    stopSound(()=>context.stop());
+  }
+});
+const options=new cast.framework.CastReceiverOptions();
+options.disableIdleTimeout=true;
+options.skipPlayersLoad=true;
+options.customNamespaces={[NS]: cast.framework.system.MessageType.JSON};
+context.start(options);
+</script>
+</body>
+</html>
